@@ -1,2 +1,4 @@
 mlruns/
 *.gz
+__pycache__/
+

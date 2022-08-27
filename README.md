@@ -7,3 +7,4 @@ MLFlow-Kafka:https://www.vantage-ai.com/en/blog/keeping-your-ml-model-in-shape-w
 
 Tensorflow-Kafka:https://www.tensorflow.org/io/tutorials/kafka
 
+Zaurin's code: https://github.com/jrzaurin/ml-pipeline
