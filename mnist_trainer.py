@@ -16,7 +16,7 @@ num_classes = 10
 input_shape = (28, 28, 1)
 
 # Load the data and split it between train and test sets
-(x_train, y_train), (x_test, y_test) = keras.datasets.mnits.load_data()
+(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
 # Scale images to the [0, 1] range
 x_train = x_train.astype("float32") / 255
@@ -35,35 +35,38 @@ y_test = keras.utils.to_categorical(y_test, num_classes)
 
 
 def objective(params):
-    mlflow.tensorflow.autolog()
-    model = keras.Sequential(
-        [
-            keras.Input(shape=input_shape),
-            layers.Conv2D(params['l1_nodes'], kernel_size=(3, 3), activation="relu"),
-            layers.MaxPooling2D(pool_size=(2, 2)),
-            layers.Conv2D(32, kernel_size=(3, 3), activation="relu"),
-            layers.MaxPooling2D(pool_size=(2, 2)),
-            layers.Flatten(),
-            layers.Dropout(params['dropout1']),
-            layers.Dense(num_classes, activation="softmax"),
-        ]
-    )
+    with mlflow.start_run():
+        mlflow.tensorflow.autolog()
+        model = keras.Sequential(
+            [
+                keras.Input(shape=input_shape),
+                layers.Conv2D(params['l1_nodes'], kernel_size=(3, 3), activation="relu"),
+                layers.MaxPooling2D(pool_size=(2, 2)),
+                layers.Conv2D(32, kernel_size=(3, 3), activation="relu"),
+                layers.MaxPooling2D(pool_size=(2, 2)),
+                layers.Flatten(),
+                layers.Dropout(params['dropout1']),
+                layers.Dense(num_classes, activation="softmax"),
+            ]
+        )
 
-    batch_size = 128
-    epochs = 5
+        batch_size = 128
+        epochs = 5
 
-    model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
+        model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
-    model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
+        model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
 
-    score = model.evaluate(x_test, y_test, verbose=0)
+        score = model.evaluate(x_test, y_test, verbose=0)
     return {'loss': -score[1], 'status': STATUS_OK, 'params': params}
 
-trials = Trials()
-best = fmin(
-    fn=objective,
-    space=space,
-    algo=tpe.suggest,
-    max_evals=10,
-    trials=trials
-)
+if __name__ == "__main__":
+    mlflow.set_tracking_uri("http://localhost:5000")
+    trials = Trials()
+    best = fmin(
+        fn=objective,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=10,
+        trials=trials
+    )
