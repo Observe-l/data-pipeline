@@ -1,4 +1,5 @@
-mlruns/
+*.db
 *.gz
+mlruns/
 __pycache__/
 

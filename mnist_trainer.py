@@ -5,11 +5,10 @@ import mlflow
 
 from hyperopt import hp, tpe, fmin, Trials, SparkTrials, STATUS_OK
 
-mlflow.set_experiment("mnist-hyperopt")
-
 space = {
-    "l1_nodes": hp.uniform('l1_nodes', 8,16),
-    'dropout1': hp.uniform('dropout1', .25,.75)
+    "layer1_nodes": hp.quniform('layer1_nodes', 8,32,1), # return a integer value. round(uiform(low,up) / i ) * i
+    "layer2_nodes": hp.quniform('layer2_nodes', 16,48,1),
+    'dropout1': hp.uniform('dropout1', .01,.3)
 }
 # Model / data parameters
 num_classes = 10
@@ -34,15 +33,18 @@ y_train = keras.utils.to_categorical(y_train, num_classes)
 y_test = keras.utils.to_categorical(y_test, num_classes)
 
 
-def objective(params):
-    with mlflow.start_run():
-        mlflow.tensorflow.autolog()
+def objective(params:dict):
+    mlflow.set_experiment("log_models")
+    with mlflow.start_run() as run:
+        run_id = run.info.run_id
+        mlflow.tensorflow.autolog(log_models=False, disable=False, registered_model_name=None)
+        mlflow.log_params(params)
         model = keras.Sequential(
             [
                 keras.Input(shape=input_shape),
-                layers.Conv2D(params['l1_nodes'], kernel_size=(3, 3), activation="relu"),
+                layers.Conv2D(params['layer1_nodes'], kernel_size=(3, 3), activation="relu"),
                 layers.MaxPooling2D(pool_size=(2, 2)),
-                layers.Conv2D(32, kernel_size=(3, 3), activation="relu"),
+                layers.Conv2D(params['layer2_nodes'], kernel_size=(3, 3), activation="relu"),
                 layers.MaxPooling2D(pool_size=(2, 2)),
                 layers.Flatten(),
                 layers.Dropout(params['dropout1']),
@@ -56,9 +58,9 @@ def objective(params):
         model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
         model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
-
+        mlflow.sklearn.log_model(model,"model")
         score = model.evaluate(x_test, y_test, verbose=0)
-    return {'loss': -score[1], 'status': STATUS_OK, 'params': params}
+    return {'loss': -score[1], 'status': STATUS_OK, 'params': params, 'mlflow_id': run_id}
 
 if __name__ == "__main__":
     mlflow.set_tracking_uri("http://localhost:5000")
@@ -67,6 +69,10 @@ if __name__ == "__main__":
         fn=objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=10,
+        max_evals=2,
         trials=trials
+    )
+    result = mlflow.register_model(
+        f"runs:/{trials.best_trial['result']['mlflow_id']}/model",
+        f"mnist_best_model"
     )
