@@ -33,8 +33,10 @@ y_train = keras.utils.to_categorical(y_train, num_classes)
 y_test = keras.utils.to_categorical(y_test, num_classes)
 
 
+
 def objective(params:dict):
-    mlflow.set_experiment("log_models")
+    # mlflow.set_tracking_uri("http://localhost:5000")
+    mlflow.set_experiment("mnist_lap1")
     with mlflow.start_run() as run:
         run_id = run.info.run_id
         mlflow.tensorflow.autolog(log_models=False, disable=False, registered_model_name=None)
@@ -63,16 +65,39 @@ def objective(params:dict):
     return {'loss': -score[1], 'status': STATUS_OK, 'params': params, 'mlflow_id': run_id}
 
 if __name__ == "__main__":
-    mlflow.set_tracking_uri("http://localhost:5000")
+    # Tracking the mysql database
+    mlflow.set_tracking_uri("http://192.168.1.118:5000")
+    client = mlflow.tracking.MlflowClient()
+
     trials = Trials()
     best = fmin(
         fn=objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=2,
+        max_evals=5,
         trials=trials
     )
+    # Get the best parameters and model id
+    best_result = trials.best_trial['result']
+    # Register the best model
     result = mlflow.register_model(
-        f"runs:/{trials.best_trial['result']['mlflow_id']}/model",
+        f"runs:/{best_result['mlflow_id']}/model",
         f"mnist_best_model"
+    )
+    # Get the latest model version
+    latest_version = int(client.get_latest_versions(name='mnist_best_model')[0].version)
+    # Updata the description
+    client.update_model_version(
+        name='mnist_best_model',
+        version=latest_version,
+        description=f"The hyperparameters: layer1 nodes:{best_result['params']['layer1_nodes']}, \
+        layer2 nodes:{best_result['params']['layer2_nodes']}, \
+        dropout1:{best_result['params']['dropout1']}"
+    )
+    # Transition the latest model to Production stage, others to Archived stage
+    client.transition_model_version_stage(
+        name='mnist_best_model',
+        version= latest_version,
+        stage='Production',
+        archive_existing_versions=True
     )
