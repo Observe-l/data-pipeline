@@ -36,10 +36,10 @@ y_test = keras.utils.to_categorical(y_test, num_classes)
 
 def objective(params:dict):
     # mlflow.set_tracking_uri("http://localhost:5000")
-    mlflow.set_experiment("mnist_lap1")
+    mlflow.set_experiment("mnist_demo")
     with mlflow.start_run() as run:
         run_id = run.info.run_id
-        mlflow.tensorflow.autolog(log_models=False, disable=False, registered_model_name=None)
+        mlflow.tensorflow.autolog(log_models=True, disable=False, registered_model_name=None)
         mlflow.log_params(params)
         model = keras.Sequential(
             [
@@ -60,7 +60,7 @@ def objective(params:dict):
         model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
         model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
-        mlflow.sklearn.log_model(model,"model")
+        # mlflow.sklearn.log_model(model,"model")
         score = model.evaluate(x_test, y_test, verbose=0)
     return {'loss': -score[1], 'status': STATUS_OK, 'params': params, 'mlflow_id': run_id}
 
