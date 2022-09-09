@@ -1,154 +1,105 @@
 import numpy as np
-import pandas as pd
-import lightgbm as lgb
-import os
-import time
-import pickle
-import pdb
-import warnings
-import mlflow
-import mlflow.sklearn
-
 from tensorflow import keras
+from tensorflow.keras import layers
+import mlflow
+import json
+import pickle
 
-from hyperas import optim
-from hyperas.distributions import choice, uniform
-
-from sklearn.model_selection import train_test_split
+from hyperopt import hp, tpe, fmin, Trials, SparkTrials, STATUS_OK
 
 from pathlib import Path
-from sklearn.metrics import f1_score
-from hyperopt import hp, tpe, fmin, Trials, SparkTrials, STATUS_OK
-from mlflow.tracking import MlflowClient
+from kafka import KafkaConsumer
 
+from utils.kafka_producer import publish_messages
 
-warnings.filterwarnings("ignore")
+space = {
+    "layer1_nodes": hp.quniform('layer1_nodes', 8,32,1), # return a integer value. round(uiform(low,up) / i ) * i
+    "layer2_nodes": hp.quniform('layer2_nodes', 16,48,1),
+    'dropout1': hp.uniform('dropout1', .01,.3)
+}
 
-class LGBOptimizer(object):
-	def __init__(self, trainDataset, out_dir):
-		"""
-		Hyper Parameter optimization with keras
+# The global parameters. Data path and server uri
+KAFKA_HOST = 'redpc:9092'
+TOPICS = 'mnist_train'
+MODLE_NAME = 'mnist_best_model'
+PATH = Path('mnist_data/')
+TRAIN_DATA = PATH/'train/mnist_data.p'
+TRAIN_LABEL = PATH/'train/mnist_label.p'
 
-		Parameters:
-		-----------
-		trainDataset: FeatureTools object
-			The result of running FeatureTools().fit()
-		out_dir: pathlib.PosixPath
-			Path to the output directory
-		"""
-		self.PATH = out_dir
-		self.early_stop_dict = {}
-		self.seq_len = 15
+def get_objective(data, label):
+    def objective(params:dict):
+        # mlflow.set_tracking_uri("http://localhost:5000")
+        mlflow.set_experiment("mnist_yellow")
+        num_classes = 10
+        input_shape = (28, 28, 1)
 
-		self.X = trainDataset.data
-		self.y = trainDataset.target
-		self.colnames = trainDataset.colnames
-		self.categorical_columns = trainDataset.categorical_columns + trainDataset.crossed_columns
+        y_train = keras.utils.to_categorical(label, num_classes)
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
+            mlflow.tensorflow.autolog(log_models=True, disable=False, registered_model_name=None)
+            mlflow.log_params(params)
+            model = keras.Sequential(
+                [
+                    keras.Input(shape=input_shape),
+                    layers.Conv2D(params['layer1_nodes'], kernel_size=(3, 3), activation="relu"),
+                    layers.MaxPooling2D(pool_size=(2, 2)),
+                    layers.Conv2D(params['layer2_nodes'], kernel_size=(3, 3), activation="relu"),
+                    layers.MaxPooling2D(pool_size=(2, 2)),
+                    layers.Flatten(),
+                    layers.Dropout(params['dropout1']),
+                    layers.Dense(num_classes, activation="softmax"),
+                ]
+            )
 
-		self.train_array = self.gen_sequence(self.X, self.seq_len, self.colnames)
-		self.label = np.delete(np.array(self.y.values).T,np.s_[0:self.seq_len-1],0)
+            batch_size = 128
+            epochs = 5
 
-		self.lgtrain = lgb.Dataset(self.X,label=self.y,
-			feature_name=self.colnames,
-			categorical_feature = self.categorical_columns,
-			free_raw_data=False)
+            model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
-	def gen_sequence(self,df_train: pd.DataFrame ,seq_length: int, seq_cols):
-		
-		data_array = df_train[seq_cols].values
-		num_element = data_array.shape[0]
-		train_array = np.zeros((num_element-seq_length+1,seq_length,len(seq_cols)))
-		for idx in range(num_element-seq_length+1):
-			train_array[idx,:,:] = data_array[idx:idx+seq_length,:]
-		return train_array
-	
-	def data_sequence(self):
-		"""
-		Data Providing function
+            history = model.fit(data, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
+            # mlflow.sklearn.log_model(model,"model")
+            # score = model.evaluate(x_test, y_test, verbose=0)
+            score = -history.history['accuracy'][-1]
+        objective.i += 1
+        return {'loss': score, 'status': STATUS_OK, 'params': params, 'mlflow_id': run_id}
+    return objective
 
-		This function will be called by hyperas
-		The train data is a 3D array. slide window size is 15
-		train_test_spilit could generate test dataset and train dataset
+def hyper_opt(x_train,y_train, maxevals:int = 5):
+    client = mlflow.tracking.MlflowClient()
 
-		"""
-		data_array = np.array(self.X[self.colnames].values)
-		label_array = np.array(self.y.values).T
+    trials = Trials()
+    objective = get_objective(x_train,y_train)
+    objective.i=0
+    best = fmin(
+        fn=objective,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=maxevals,
+        trials=trials
+    )
+    # Get the best parameters and model id
+    best_result = trials.best_trial['result']
+    # Register the best model
+    result = mlflow.register_model(
+        f"runs:/{best_result['mlflow_id']}/model",
+        f"mnist_best_model"
+    )
+    # Get the latest model version
+    latest_version = int(result.version)
+    # Updata the description
+    client.update_model_version(
+        name='mnist_best_model',
+        version=latest_version,
+        description=f"The hyperparameters: layer1 nodes:{best_result['params']['layer1_nodes']}, \
+        layer2 nodes:{best_result['params']['layer2_nodes']}, \
+        dropout1:{best_result['params']['dropout1']}"
+    )
+    # Transition the latest model to Production stage, others to Archived stage
+    client.transition_model_version_stage(
+        name='mnist_best_model',
+        version= latest_version,
+        stage='Production',
+        archive_existing_versions=True
+    )
+    return latest_version
 
-		data_train, data_test, label_train, label_test = train_test_split(data_array, label_array, test_size=0.05)
-		return data_train, label_train, data_test, label_test
-
-	def get_run_logdir(self, k):
-		"""
-		Record the data in the tensorboard
-		"""
-		root_logdir = os.path.join(os.curdir, "hyperopt_keras", k)
-		run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
-		return os.path.join(root_logdir, run_id)
-
-	def create_model(self, data_train, label_train, data_test, label_test):
-		"""
-		Create a keras model
-		3 Dense layer
-		hyperparameters:
-		layer 1 nodes: 8,16,32
-		layer 2 nodes: 16,36,64
-		Dropout layer probability: [0.1-0.5]
-		batch size: 64, 128
-		"""
-		cb = keras.callbacks.TensorBoard(log_dir= self.get_run_logdir("hyperopt_history"), histogram_freq=1, write_graph= True, update_freq='epoch')
-
-		model = keras.Sequential(
-			keras.layers.Dense(choice[8,16,32],input_dim=15,activation='relu'),
-			keras.layers.Dropout(0.1),
-			keras.layers.Dense(choice[16,32,64],activation='relu'),
-			keras.layers.Dropout(uniform(0.1,0.5)),
-			keras.layers.Dense(1,activation='sigmoid')
-		)
-		model.compile(optimizer='adam',
-					loss = 'binary_crossentropy',
-					metrics=['accuracy'])
-		
-		history = model.fit(data_train, label_train,
-							batch_size = {choice([64,128])},
-							epochs = 2,
-							callbacks = [cb],
-
-		)
-		validation_acc = np.amax(history.history['val_accuracy'])
-		print('Best validation acc of epoch:', validation_acc)
-		return {'loss': -validation_acc, 'status': STATUS_OK, 'model': model}
-
-
-	def optimize(self, maxevals=200, model_id=0, reuse_experiment=False):
-		trials = Trials()
-		# trials = SparkTrials(parallelism=2)
-		best_run, best_model = optim.minimize(
-			model=self.create_model,
-			data=self.data_sequence,
-			algo=tpe.suggest,
-			max_evals=maxevals,
-			trials= trials)
-		model_fname = 'model_{}_.p'.format(model_id)
-		best_experiment_fname = 'best_experiment_{}_.p'.format(model_id)
-		pickle.dump(best_model, open(self.PATH/model_fname, 'wb'))
-		pickle.dump(best_run, open(self.PATH/best_experiment_fname, 'wb'))
-
-
-
-	def hyperparameter_space(self, param_space=None):
-
-		space = {
-			'learning_rate': hp.uniform('learning_rate', 0.01, 0.2),
-			'boost_round': hp.quniform('boost_round', 50, 500, 20),
-			'num_leaves': hp.quniform('num_leaves', 31, 256, 4),
-		    'min_child_weight': hp.uniform('min_child_weight', 0.1, 10),
-		    'colsample_bytree': hp.uniform('colsample_bytree', 0.5, 1.),
-		    'subsample': hp.uniform('subsample', 0.5, 1.),
-		    'reg_alpha': hp.uniform('reg_alpha', 0.01, 0.1),
-		    'reg_lambda': hp.uniform('reg_lambda', 0.01, 0.1),
-		}
-
-		if param_space:
-			return param_space
-		else:
-			return space

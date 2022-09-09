@@ -9,7 +9,7 @@ from time import sleep
 
 
 PATH = Path('data/')
-KAFKA_HOST = 'localhost:9092'
+KAFKA_HOST = 'redpc:9092'
 df_test = pd.read_csv(PATH/'adult.test')
 # In the real world, the messages would not come with the target/outcome of
 # our actions. Here we will keep it and assume that at some point in the

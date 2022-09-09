@@ -1,5 +1,6 @@
 *.db
 *.gz
+mnist_data/
 mlruns/
 mlruns_test/
 sqlite_runs/

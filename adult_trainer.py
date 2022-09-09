@@ -21,7 +21,7 @@ from utils.messages_utils import publish_traininig_completed
 from utils.preprocess_data import build_train
 
 
-KAFKA_HOST = 'localhost:9092'
+KAFKA_HOST = 'redpc:9092'
 RETRAIN_TOPIC = 'retrain_topic'
 PATH = Path('data/')
 TRAIN_DATA = PATH/'train/train.csv'

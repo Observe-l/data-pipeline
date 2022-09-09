@@ -9,7 +9,7 @@ from pathlib import Path
 from kafka import KafkaConsumer
 from utils.messages_utils import append_message, read_messages_count, send_retrain_message, publish_prediction
 
-KAFKA_HOST = 'localhost:9092'
+KAFKA_HOST = 'redpc:9092'
 TOPICS = ['app_messages', 'retrain_topic']
 PATH = Path('data/')
 MODELS_PATH = PATH/'models'

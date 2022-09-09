@@ -13,19 +13,11 @@ Zaurin's code: https://github.com/jrzaurin/ml-pipeline
 
 # MLflow Tracking server
 
-```shell
-mlflow server \
-    --backend-store-uri sqlite:///mlflow.db \
-    --default-artifact-root /nfsroot/mlruns_sqlite \
-    --host 0.0.0.0 \
-    --port 6100
-```
-
 Use mysql database
 
 ```shell
 mlflow server \
-    --backend-store-uri mysql://VEC:666888@localhost:3306/MLflow \
+    --backend-store-uri mysql://lwh:666888@localhost:3306/MLflow \
     --default-artifact-root /nfsroot/mlruns \
     --host 0.0.0.0 \
     --port 5000

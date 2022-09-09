@@ -2,79 +2,79 @@ import numpy as np
 from tensorflow import keras
 from tensorflow.keras import layers
 import mlflow
+import json
+import pickle
 
 from hyperopt import hp, tpe, fmin, Trials, SparkTrials, STATUS_OK
+
+from pathlib import Path
+from kafka import KafkaConsumer
+
+from utils.kafka_producer import publish_messages
 
 space = {
     "layer1_nodes": hp.quniform('layer1_nodes', 8,32,1), # return a integer value. round(uiform(low,up) / i ) * i
     "layer2_nodes": hp.quniform('layer2_nodes', 16,48,1),
     'dropout1': hp.uniform('dropout1', .01,.3)
 }
-# Model / data parameters
-num_classes = 10
-input_shape = (28, 28, 1)
 
-# Load the data and split it between train and test sets
-(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+# The global parameters. Data path and server uri
+KAFKA_HOST = 'redpc:9092'
+TOPICS = 'mnist_train'
+MODLE_NAME = 'mnist_best_model'
+PATH = Path('mnist_data/')
+TRAIN_DATA = PATH/'train/mnist_data.p'
+TRAIN_LABEL = PATH/'train/mnist_label.p'
 
-# Scale images to the [0, 1] range
-x_train = x_train.astype("float32") / 255
-x_test = x_test.astype("float32") / 255
-# Make sure images have shape (28, 28, 1)
-x_train = np.expand_dims(x_train, -1)
-x_test = np.expand_dims(x_test, -1)
-print("x_train shape:", x_train.shape)
-print(x_train.shape[0], "train samples")
-print(x_test.shape[0], "test samples")
+def get_objective(data, label):
+    def objective(params:dict):
+        # mlflow.set_tracking_uri("http://localhost:5000")
+        mlflow.set_experiment("mnist_kafka")
+        num_classes = 10
+        input_shape = (28, 28, 1)
 
+        y_train = keras.utils.to_categorical(label, num_classes)
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
+            mlflow.tensorflow.autolog(log_models=True, disable=False, registered_model_name=None)
+            mlflow.log_params(params)
+            model = keras.Sequential(
+                [
+                    keras.Input(shape=input_shape),
+                    layers.Conv2D(params['layer1_nodes'], kernel_size=(3, 3), activation="relu"),
+                    layers.MaxPooling2D(pool_size=(2, 2)),
+                    layers.Conv2D(params['layer2_nodes'], kernel_size=(3, 3), activation="relu"),
+                    layers.MaxPooling2D(pool_size=(2, 2)),
+                    layers.Flatten(),
+                    layers.Dropout(params['dropout1']),
+                    layers.Dense(num_classes, activation="softmax"),
+                ]
+            )
 
-# convert class vectors to binary class matrices
-y_train = keras.utils.to_categorical(y_train, num_classes)
-y_test = keras.utils.to_categorical(y_test, num_classes)
+            batch_size = 128
+            epochs = 20
 
+            model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
+            history = model.fit(data, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
+            # mlflow.sklearn.log_model(model,"model")
+            # score = model.evaluate(x_test, y_test, verbose=0)
+            score = -history.history['accuracy'][-1]
+        objective.i += 1
+        return {'loss': score, 'status': STATUS_OK, 'params': params, 'mlflow_id': run_id}
+    return objective
 
-def objective(params:dict):
-    # mlflow.set_tracking_uri("http://localhost:5000")
-    mlflow.set_experiment("mnist_demo")
-    with mlflow.start_run() as run:
-        run_id = run.info.run_id
-        mlflow.tensorflow.autolog(log_models=True, disable=False, registered_model_name=None)
-        mlflow.log_params(params)
-        model = keras.Sequential(
-            [
-                keras.Input(shape=input_shape),
-                layers.Conv2D(params['layer1_nodes'], kernel_size=(3, 3), activation="relu"),
-                layers.MaxPooling2D(pool_size=(2, 2)),
-                layers.Conv2D(params['layer2_nodes'], kernel_size=(3, 3), activation="relu"),
-                layers.MaxPooling2D(pool_size=(2, 2)),
-                layers.Flatten(),
-                layers.Dropout(params['dropout1']),
-                layers.Dense(num_classes, activation="softmax"),
-            ]
-        )
-
-        batch_size = 128
-        epochs = 5
-
-        model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
-
-        model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.1)
-        # mlflow.sklearn.log_model(model,"model")
-        score = model.evaluate(x_test, y_test, verbose=0)
-    return {'loss': -score[1], 'status': STATUS_OK, 'params': params, 'mlflow_id': run_id}
-
-if __name__ == "__main__":
-    # Tracking the mysql database
-    mlflow.set_tracking_uri("http://192.168.1.118:5000")
+def hyper_opt(x_train,y_train, maxevals:int = 5):
     client = mlflow.tracking.MlflowClient()
 
     trials = Trials()
+    objective = get_objective(x_train,y_train)
+    objective.i=0
     best = fmin(
         fn=objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=5,
+        max_evals=maxevals,
         trials=trials
     )
     # Get the best parameters and model id
@@ -85,7 +85,7 @@ if __name__ == "__main__":
         f"mnist_best_model"
     )
     # Get the latest model version
-    latest_version = int(client.get_latest_versions(name='mnist_best_model')[0].version)
+    latest_version = int(result.version)
     # Updata the description
     client.update_model_version(
         name='mnist_best_model',
@@ -101,3 +101,20 @@ if __name__ == "__main__":
         stage='Production',
         archive_existing_versions=True
     )
+    return latest_version
+
+if __name__ == "__main__":
+    # Tracking the mysql database
+    mlflow.set_tracking_uri("http://redpc:5000")
+    consumer = KafkaConsumer(TOPICS ,bootstrap_servers=KAFKA_HOST)
+    for msg in consumer:
+        message = json.loads(msg.value)
+        if 'retrain' in message and message['retrain']:
+            x_train = pickle.load(open(TRAIN_DATA,'rb'))
+            y_train = pickle.load(open(TRAIN_LABEL,'rb'))
+            model_version = hyper_opt(x_train=x_train, y_train=y_train, maxevals=2)
+            tmp_train_msg = {'training_completed': True, 'model_version': model_version}
+            publish_messages(topic=TOPICS,messages=tmp_train_msg)
+            print(f"Retraining completed. The latest model version is: {model_version}")
+
+
