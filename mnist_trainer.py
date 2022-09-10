@@ -29,7 +29,7 @@ TRAIN_LABEL = PATH/'train/mnist_label.p'
 def get_objective(data, label):
     def objective(params:dict):
         # mlflow.set_tracking_uri("http://localhost:5000")
-        mlflow.set_experiment("mnist_kafka")
+        mlflow.set_experiment("demo_mnist_kafka")
         num_classes = 10
         input_shape = (28, 28, 1)
 

@@ -7,8 +7,6 @@ os.environ["CUDA_VISIBLE_DEVICES"]="-1"
 
 import mlflow
 from pathlib import Path
-from tensorflow import keras
-from tensorflow.keras import layers
 from utils.kafka_producer import publish_messages, append_data
 from kafka import KafkaConsumer, KafkaProducer
 
