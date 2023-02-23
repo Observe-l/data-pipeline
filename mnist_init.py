@@ -21,7 +21,7 @@ space = {
 def get_objective(data, label):
     def objective(params:dict):
         # mlflow.set_tracking_uri("http://localhost:5000")
-        mlflow.set_experiment("demo_mnist_kafka")
+        mlflow.set_experiment("demo_mnist_udp")
         num_classes = 10
         input_shape = (28, 28, 1)
 
@@ -119,8 +119,8 @@ def download_data():
     pickle.dump(train_save[0],open(TRAIN_DATA/'mnist_data.p',"wb"))
     pickle.dump(train_label[0],open(TRAIN_DATA/'mnist_label.p',"wb"))
     # Save the transfer data and label
-    pickle.dump(train_save[1],open(TRAIN_DATA/'kafka_data.p',"wb"))
-    pickle.dump(train_label[1],open(TRAIN_DATA/'kafka_label.p',"wb"))
+    pickle.dump(train_save[1],open(TRAIN_DATA/'udp_data.p',"wb"))
+    pickle.dump(train_label[1],open(TRAIN_DATA/'udp_label.p',"wb"))
 
 def create_model():
     x_train = pickle.load(open(TRAIN_DATA/'mnist_data.p',"rb"))
@@ -130,7 +130,7 @@ def create_model():
 
 
 if __name__ == '__main__':
-    mlflow.set_tracking_uri("http://redpc:5000")
+    mlflow.set_tracking_uri("http://localhost:5000")
     create_folders()
     download_data()
     create_model()
