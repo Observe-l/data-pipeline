@@ -1,5 +1,6 @@
 *.db
 *.gz
+*.txt
 mnist_data/
 mlruns/
 mlruns_test/
